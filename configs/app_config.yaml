@@ -1,0 +1,23 @@
+app:
+  title: "Air Quality Forecasting System"
+  page_icon: "🌍"
+  layout: "wide"
+
+aqi_thresholds:
+  good: [0, 50]
+  moderate: [51, 100]
+  unhealthy_sensitive: [101, 150]
+  unhealthy: [151, 200]
+  very_unhealthy: [201, 300]
+  hazardous: [301, 500]
+
+alert_threshold: 100  # AQI value
+
+cities:
+  - Delhi
+  - Mumbai
+  - Bangalore
+  - Chennai
+  - Kolkata
+
+forecast_days: 7

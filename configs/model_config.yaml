@@ -1,0 +1,27 @@
+arima:
+  order: [1, 1, 1]
+  seasonal_order: [1, 1, 1, 24]
+  trend: 'ct'
+
+prophet:
+  seasonality_mode: 'multiplicative'
+  yearly_seasonality: true
+  weekly_seasonality: true
+  daily_seasonality: false
+  changepoint_prior_scale: 0.05
+
+lstm:
+  units: 64
+  dropout: 0.2
+  epochs: 50
+  batch_size: 32
+  lookback: 24
+  validation_split: 0.2
+
+xgboost:
+  n_estimators: 100
+  max_depth: 6
+  learning_rate: 0.1
+  subsample: 0.8
+  colsample_bytree: 0.8
+  lookback_hours: 24
