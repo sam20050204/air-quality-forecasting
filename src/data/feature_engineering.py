@@ -169,6 +169,9 @@ class FeatureEngineer:
         # Separate features and target
         X = df_features.drop(columns=[target_column])
         y = df_features[target_column]
+        # Keep only numeric columns (exclude text columns like 'city')
+        numeric_columns = X.select_dtypes(include=[np.number]).columns
+        X = X[numeric_columns]
         
         logger.info(f"Prepared {len(X)} samples with {X.shape[1]} features")
         

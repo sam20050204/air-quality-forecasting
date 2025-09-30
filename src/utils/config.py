@@ -12,7 +12,7 @@ class Config:
         self.app_config = self._load_yaml('app_config.yaml')
     
     def _load_yaml(self, filename):
-        with open(self.config_dir / filename, 'r') as f:
+        with open(self.config_dir / filename, 'r', encoding='utf-8') as f:
             return yaml.safe_load(f)
     
     @property
