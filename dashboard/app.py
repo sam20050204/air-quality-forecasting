@@ -194,6 +194,396 @@ def plot_prediction_comparison(result_df, pollutant):
     
     return fig
 
+# Add these functions to your dashboard/app.py file
+# Place them before the main() function
+
+def show_forecasts(df):
+    """Forecasts page"""
+    st.header("🔮 Air Quality Forecasts")
+    
+    # Check if models are loaded
+    if not st.session_state.models_loaded:
+        with st.spinner("Loading models..."):
+            models = load_models()
+            if models:
+                st.session_state.models = models
+                st.session_state.models_loaded = True
+            else:
+                st.error("⚠️ No trained models found. Please train models first.")
+                st.info("Run: `python scripts/train_models.py --pollutant all`")
+                return
+    
+    st.success(f"✅ {len(st.session_state.models)} models loaded")
+    
+    # Forecast settings
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        pollutant = st.selectbox(
+            "Select Pollutant",
+            list(st.session_state.models.keys())
+        )
+    
+    with col2:
+        forecast_hours = st.slider("Forecast Hours", 6, 72, 24)
+    
+    if st.button("Generate Forecast", type="primary"):
+        with st.spinner("Generating forecast..."):
+            handler = PredictionHandler()
+            handler.models = st.session_state.models
+            
+            try:
+                # Generate forecast
+                forecast_df = handler.forecast_future(df, pollutant, hours_ahead=forecast_hours)
+                
+                # Plot forecast
+                fig = go.Figure()
+                
+                # Historical data (last 48 hours)
+                historical = df[pollutant].tail(48)
+                fig.add_trace(go.Scatter(
+                    x=historical.index,
+                    y=historical.values,
+                    mode='lines',
+                    name='Historical',
+                    line=dict(color='blue', width=2)
+                ))
+                
+                # Forecast
+                fig.add_trace(go.Scatter(
+                    x=forecast_df.index,
+                    y=forecast_df[f'{pollutant}_forecast'],
+                    mode='lines+markers',
+                    name='Forecast',
+                    line=dict(color='red', dash='dash', width=2),
+                    marker=dict(size=6)
+                ))
+                
+                fig.update_layout(
+                    title=f'{pollutant} - {forecast_hours}h Forecast',
+                    xaxis_title='Date & Time',
+                    yaxis_title=f'{pollutant} (μg/m³)',
+                    hovermode='x unified',
+                    height=500,
+                    showlegend=True
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Statistics
+                st.subheader("📊 Forecast Statistics")
+                
+                col1, col2, col3, col4 = st.columns(4)
+                
+                forecast_values = forecast_df[f'{pollutant}_forecast']
+                
+                col1.metric("Average", f"{forecast_values.mean():.1f} μg/m³")
+                col2.metric("Maximum", f"{forecast_values.max():.1f} μg/m³")
+                col3.metric("Minimum", f"{forecast_values.min():.1f} μg/m³")
+                col4.metric("Std Dev", f"{forecast_values.std():.1f}")
+                
+                # Alert if high values predicted
+                threshold = historical.quantile(0.9)
+                high_values = forecast_df[forecast_df[f'{pollutant}_forecast'] > threshold]
+                
+                if len(high_values) > 0:
+                    st.warning(f"⚠️ High {pollutant} levels predicted in {len(high_values)} time periods!")
+                
+                # Download forecast
+                csv = forecast_df.to_csv()
+                st.download_button(
+                    label="📥 Download Forecast",
+                    data=csv,
+                    file_name=f"{pollutant}_forecast_{datetime.now().strftime('%Y%m%d')}.csv",
+                    mime="text/csv"
+                )
+                
+            except Exception as e:
+                st.error(f"Error generating forecast: {str(e)}")
+
+
+def show_analysis(df):
+    """Data analysis page"""
+    st.header("📈 Data Analysis")
+    
+    # Data overview
+    st.subheader("📊 Dataset Overview")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Total Records", f"{len(df):,}")
+    col2.metric("Time Span", f"{(df.index[-1] - df.index[0]).days} days")
+    col3.metric("Pollutants", len([col for col in df.columns if col in config.data_config['pollutants']]))
+    col4.metric("Completeness", f"{((1 - df.isnull().sum().sum() / (len(df) * len(df.columns))) * 100):.1f}%")
+    
+    # Pollutant statistics
+    st.subheader("🔬 Pollutant Statistics")
+    
+    pollutants_in_data = [col for col in df.columns if col in config.data_config['pollutants']]
+    
+    if pollutants_in_data:
+        stats_df = df[pollutants_in_data].describe().T
+        stats_df['missing_%'] = (df[pollutants_in_data].isnull().sum() / len(df) * 100).values
+        
+        st.dataframe(stats_df.style.format("{:.2f}"), use_container_width=True)
+    
+    # Correlation heatmap
+    st.subheader("🔗 Pollutant Correlations")
+    
+    if len(pollutants_in_data) > 1:
+        corr = df[pollutants_in_data].corr()
+        
+        fig = px.imshow(
+            corr,
+            labels=dict(color="Correlation"),
+            x=pollutants_in_data,
+            y=pollutants_in_data,
+            color_continuous_scale='RdBu_r',
+            aspect="auto"
+        )
+        fig.update_layout(height=500)
+        st.plotly_chart(fig, use_container_width=True)
+    
+    # Distribution plots
+    st.subheader("📊 Pollutant Distributions")
+    
+    selected_pollutant = st.selectbox("Select pollutant for distribution", pollutants_in_data)
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Histogram
+        fig_hist = px.histogram(
+            df,
+            x=selected_pollutant,
+            nbins=50,
+            title=f"{selected_pollutant} Distribution"
+        )
+        st.plotly_chart(fig_hist, use_container_width=True)
+    
+    with col2:
+        # Box plot
+        fig_box = px.box(
+            df,
+            y=selected_pollutant,
+            title=f"{selected_pollutant} Box Plot"
+        )
+        st.plotly_chart(fig_box, use_container_width=True)
+    
+    # Time patterns
+    st.subheader("⏰ Temporal Patterns")
+    
+    # Hourly pattern
+    df_hourly = df.copy()
+    df_hourly['hour'] = df_hourly.index.hour
+    hourly_avg = df_hourly.groupby('hour')[selected_pollutant].mean()
+    
+    fig_hourly = px.line(
+        x=hourly_avg.index,
+        y=hourly_avg.values,
+        title=f"{selected_pollutant} - Average by Hour of Day",
+        labels={'x': 'Hour', 'y': f'{selected_pollutant} (μg/m³)'}
+    )
+    fig_hourly.update_traces(mode='lines+markers')
+    st.plotly_chart(fig_hourly, use_container_width=True)
+    
+    # Day of week pattern
+    df_dow = df.copy()
+    df_dow['day_of_week'] = df_dow.index.dayofweek
+    dow_avg = df_dow.groupby('day_of_week')[selected_pollutant].mean()
+    
+    day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+    
+    fig_dow = px.bar(
+        x=day_names,
+        y=dow_avg.values,
+        title=f"{selected_pollutant} - Average by Day of Week",
+        labels={'x': 'Day', 'y': f'{selected_pollutant} (μg/m³)'}
+    )
+    st.plotly_chart(fig_dow, use_container_width=True)
+    
+    # Monthly trend
+    if (df.index[-1] - df.index[0]).days > 60:
+        df_monthly = df.copy()
+        df_monthly['month'] = df_monthly.index.to_period('M')
+        monthly_avg = df_monthly.groupby('month')[selected_pollutant].mean()
+        
+        fig_monthly = px.line(
+            x=[str(m) for m in monthly_avg.index],
+            y=monthly_avg.values,
+            title=f"{selected_pollutant} - Monthly Trend",
+            labels={'x': 'Month', 'y': f'{selected_pollutant} (μg/m³)'}
+        )
+        fig_monthly.update_traces(mode='lines+markers')
+        st.plotly_chart(fig_monthly, use_container_width=True)
+
+
+def show_about():
+    """About page"""
+    st.header("ℹ️ About Air Quality Forecasting System")
+    
+    st.markdown("""
+    ## 🌍 Overview
+    
+    This Air Quality Forecasting System uses advanced machine learning models to predict 
+    pollutant levels and provide actionable insights for better air quality management.
+    
+    ## 🎯 Features
+    
+    ### 📊 Real-time Monitoring
+    - Track current air quality levels
+    - Monitor multiple pollutants (PM2.5, PM10, NO2, SO2, CO, O3)
+    - Calculate Air Quality Index (AQI)
+    - Get health recommendations
+    
+    ### 🔮 Advanced Forecasting
+    - Predict future pollutant levels (6-72 hours ahead)
+    - XGBoost-based machine learning models
+    - High accuracy predictions (R² > 0.98)
+    - Multiple forecast horizons
+    
+    ### 📤 Data Upload & Analysis
+    - Upload your own air quality data (CSV format)
+    - Automatic data validation and preprocessing
+    - Get instant predictions and insights
+    - Download results for further analysis
+    
+    ### 📈 Comprehensive Analytics
+    - Statistical analysis of pollutant trends
+    - Correlation analysis between pollutants
+    - Temporal pattern detection (hourly, daily, monthly)
+    - Distribution and outlier analysis
+    
+    ## 🤖 Machine Learning Models
+    
+    ### XGBoost Regressor
+    Our primary forecasting model uses XGBoost, a gradient boosting algorithm known for:
+    - High accuracy on time series data
+    - Efficient training and prediction
+    - Robust handling of missing values
+    - Feature importance analysis
+    
+    **Model Performance (Test Set):**
+    """)
+    
+    # Display model metrics if available
+    metrics_dir = Path('models/saved_models')
+    if metrics_dir.exists():
+        st.subheader("📊 Model Performance Metrics")
+        
+        metrics_data = []
+        for pollutant in config.data_config['pollutants']:
+            metrics_file = metrics_dir / f'xgboost_{pollutant.lower()}_metrics.json'
+            if metrics_file.exists():
+                import json
+                with open(metrics_file, 'r') as f:
+                    metrics = json.load(f)
+                metrics_data.append({
+                    'Pollutant': pollutant,
+                    'MAE': f"{metrics['mae']:.2f}",
+                    'RMSE': f"{metrics['rmse']:.2f}",
+                    'MAPE': f"{metrics['mape']:.2f}%",
+                    'R²': f"{metrics['r2']:.3f}"
+                })
+        
+        if metrics_data:
+            st.dataframe(pd.DataFrame(metrics_data), use_container_width=True)
+    
+    st.markdown("""
+    ## 💾 Data Sources
+    
+    The system supports data from:
+    - Government air quality monitoring stations
+    - OpenAQ API
+    - Custom CSV uploads
+    - Real-time sensor networks
+    
+    ## 📋 CSV Format Requirements
+    
+    For uploading your own data, ensure your CSV file includes:
+    
+    ```
+    datetime, PM2.5, PM10, NO2, SO2, CO, O3
+    2024-01-01 00:00:00, 45.2, 78.5, 32.1, 12.5, 1.2, 45.2
+    2024-01-01 01:00:00, 52.1, 85.2, 35.6, 14.2, 1.4, 48.1
+    ...
+    ```
+    
+    - **datetime**: Timestamp of measurement (required)
+    - **Pollutants**: At least one pollutant column (PM2.5, PM10, NO2, SO2, CO, O3)
+    - **Minimum rows**: 50 for reliable predictions
+    
+    ## 🔧 Technical Stack
+    
+    - **Frontend**: Streamlit
+    - **ML Framework**: XGBoost, scikit-learn
+    - **Data Processing**: pandas, numpy
+    - **Visualization**: Plotly, Matplotlib
+    - **Configuration**: YAML
+    
+    ## 📖 Usage Guide
+    
+    ### 1. Dashboard
+    View current air quality status, AQI, and recent trends.
+    
+    ### 2. Upload & Predict
+    Upload your CSV file to get predictions and model performance metrics.
+    
+    ### 3. Forecasts
+    Generate future predictions for any pollutant up to 72 hours ahead.
+    
+    ### 4. Data Analysis
+    Explore patterns, correlations, and statistics in your data.
+    
+    ## 🚀 Getting Started
+    
+    1. **Train Models** (if not done):
+       ```bash
+       python scripts/train_models.py --pollutant all
+       ```
+    
+    2. **Run Dashboard**:
+       ```bash
+       streamlit run dashboard/app.py
+       ```
+    
+    3. **Upload Data** or use sample data to explore features
+    
+    ## 📞 Support
+    
+    For issues, questions, or contributions:
+    - Check the README.md file
+    - Review configuration files in `configs/`
+    - Run diagnostic: `python check_models.py`
+    
+    ## 📜 License
+    
+    This project is developed for air quality monitoring and research purposes.
+    
+    ---
+    
+    **Version**: 1.0.0  
+    **Last Updated**: October 2025
+    """)
+    
+    # System status
+    st.subheader("🔍 System Status")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    # Check data
+    data_status = "✅ Available" if Path('data/raw/delhi_air_quality.csv').exists() else "❌ Missing"
+    col1.metric("Sample Data", data_status)
+    
+    # Check models
+    models_count = len(list(Path('models/saved_models').glob('*.pkl'))) if Path('models/saved_models').exists() else 0
+    models_status = f"✅ {models_count} models" if models_count > 0 else "❌ No models"
+    col2.metric("Trained Models", models_status)
+    
+    # Check config
+    config_status = "✅ Loaded" if Path('configs/model_config.yaml').exists() else "❌ Missing"
+    col3.metric("Configuration", config_status)
+
+
 # Main app
 def main():
     # Header
