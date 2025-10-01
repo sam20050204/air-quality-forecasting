@@ -241,87 +241,8 @@ def show_dashboard(df):
     st.plotly_chart(plot_time_series(recent_df, pollutant_select), use_container_width=True)
 
 def show_upload_page():
-    """CSV Upload and Prediction Page"""
-    st.header("📤 Upload & Predict")
-    
-    st.markdown("""
-    Upload your air quality CSV file to get predictions and insights.
-    
-    **Required Format:**
-    - Must include a datetime column
-    - Should contain at least one pollutant: PM2.5, PM10, NO2, SO2, CO, or O3
-    - Minimum 50 rows of data
-    """)
-    
-    # File uploader
-    uploaded_file = st.file_uploader(
-        "Choose a CSV file",
-        type=['csv'],
-        help="Upload your air quality data in CSV format"
-    )
-    
-    if uploaded_file is not None:
-        try:
-            # Read CSV
-            df_uploaded = pd.read_csv(uploaded_file)
-            
-            # Initialize uploader
-            uploader = CSVUploader()
-            
-            # Display raw data preview
-            st.subheader("📋 Data Preview")
-            st.dataframe(df_uploaded.head(10), use_container_width=True)
-            
-            # Validate CSV
-            is_valid, errors = uploader.validate_csv(df_uploaded)
-            
-            if not is_valid:
-                st.error("❌ Validation Failed")
-                for error in errors:
-                    st.write(f"- {error}")
-                return
-            
-            st.success("✅ CSV file validated successfully!")
-            
-            # Preprocess data
-            with st.spinner("Preprocessing data..."):
-                df_processed = uploader.preprocess_uploaded_data(df_uploaded)
-                st.session_state.uploaded_data = df_processed
-            
-            # Show data summary
-            st.subheader("📊 Data Summary")
-            summary = uploader.get_data_summary(df_processed)
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Total Records", summary['total_rows'])
-            with col2:
-                st.metric("Date Range", f"{summary['date_range']['start']} to {summary['date_range']['end']}")
-            with col3:
-                st.metric("Data Quality", summary['data_quality'])
-            
-            st.info("💡 Note: Models must be trained first. Run: `python scripts/train_models.py --pollutant all`")
-        
-        except Exception as e:
-            st.error(f"Error processing file: {str(e)}")
-    
-    else:
-        # Show example CSV format
-        st.subheader("📝 Example CSV Format")
-        
-        example_data = {
-            'datetime': ['2024-01-01 00:00:00', '2024-01-01 01:00:00', '2024-01-01 02:00:00'],
-            'PM2.5': [45.2, 52.1, 48.9],
-            'PM10': [78.5, 85.2, 81.3],
-            'NO2': [32.1, 35.6, 33.8],
-            'SO2': [12.5, 14.2, 13.1],
-            'CO': [1.2, 1.4, 1.3],
-            'O3': [45.2, 48.1, 46.5]
-        }
-        
-        st.dataframe(pd.DataFrame(example_data), use_container_width=True)
-        
-        st.info("💡 Your CSV should have similar columns. Datetime column is required, pollutants are optional.")
+    from enhanced_upload import show_enhanced_upload_page
+    show_enhanced_upload_page()  # Use enhanced version
 
 def show_forecasts(df):
     """Forecasts page"""
