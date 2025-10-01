@@ -13,6 +13,8 @@ sys.path.append(str(Path(__file__).parent.parent))
 from src.utils.config import config
 from src.utils.api_calculator import AQICalculator
 from src.models.xgboost_model import XGBoostModel
+from src.data.data_uploader import CSVUploader
+from src.data.prediction_handler import PredictionHandler
 
 # Page configuration
 st.set_page_config(
@@ -37,12 +39,27 @@ st.markdown("""
         border-radius: 10px;
         border-left: 5px solid #1f77b4;
     }
-    .aqi-good { color: #00e400; font-weight: bold; }
-    .aqi-moderate { color: #ffff00; font-weight: bold; }
-    .aqi-unhealthy-sensitive { color: #ff7e00; font-weight: bold; }
-    .aqi-unhealthy { color: #ff0000; font-weight: bold; }
-    .aqi-very-unhealthy { color: #8f3f97; font-weight: bold; }
-    .aqi-hazardous { color: #7e0023; font-weight: bold; }
+    .success-box {
+        background-color: #d4edda;
+        border: 1px solid #c3e6cb;
+        border-radius: 5px;
+        padding: 1rem;
+        margin: 1rem 0;
+    }
+    .warning-box {
+        background-color: #fff3cd;
+        border: 1px solid #ffeaa7;
+        border-radius: 5px;
+        padding: 1rem;
+        margin: 1rem 0;
+    }
+    .error-box {
+        background-color: #f8d7da;
+        border: 1px solid #f5c6cb;
+        border-radius: 5px;
+        padding: 1rem;
+        margin: 1rem 0;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -50,6 +67,10 @@ st.markdown("""
 if 'models_loaded' not in st.session_state:
     st.session_state.models_loaded = False
     st.session_state.models = {}
+if 'uploaded_data' not in st.session_state:
+    st.session_state.uploaded_data = None
+if 'prediction_results' not in st.session_state:
+    st.session_state.prediction_results = None
 
 @st.cache_data
 def load_sample_data():
@@ -140,30 +161,31 @@ def plot_time_series(df, pollutant):
     )
     return fig
 
-def plot_forecast(historical, forecast_dates, forecast_values, pollutant):
-    """Plot historical data with forecast"""
+def plot_prediction_comparison(result_df, pollutant):
+    """Plot actual vs predicted values"""
     fig = go.Figure()
     
-    # Historical data
+    actual_col = f'{pollutant}_actual'
+    predicted_col = f'{pollutant}_predicted'
+    
     fig.add_trace(go.Scatter(
-        x=historical['datetime'],
-        y=historical[pollutant],
+        x=result_df.index,
+        y=result_df[actual_col],
         mode='lines',
-        name='Historical',
+        name='Actual',
         line=dict(color='blue')
     ))
     
-    # Forecast
     fig.add_trace(go.Scatter(
-        x=forecast_dates,
-        y=forecast_values,
-        mode='lines+markers',
-        name='Forecast',
+        x=result_df.index,
+        y=result_df[predicted_col],
+        mode='lines',
+        name='Predicted',
         line=dict(color='red', dash='dash')
     ))
     
     fig.update_layout(
-        title=f'{pollutant} Forecast',
+        title=f'{pollutant} - Actual vs Predicted',
         xaxis_title='Date',
         yaxis_title=f'{pollutant} (μg/m³)',
         hovermode='x unified',
@@ -180,13 +202,21 @@ def main():
     
     # Sidebar
     st.sidebar.title("Navigation")
-    page = st.sidebar.radio("Go to", ["Dashboard", "Forecasts", "Data Analysis", "About"])
+    page = st.sidebar.radio("Go to", [
+        "Dashboard", 
+        "Upload & Predict", 
+        "Forecasts", 
+        "Data Analysis", 
+        "About"
+    ])
     
     # Load data
     df = load_sample_data()
     
     if page == "Dashboard":
         show_dashboard(df)
+    elif page == "Upload & Predict":
+        show_upload_page()
     elif page == "Forecasts":
         show_forecasts(df)
     elif page == "Data Analysis":
@@ -240,130 +270,289 @@ def show_dashboard(df):
     pollutant_select = st.selectbox("Select Pollutant", config.data_config['pollutants'])
     st.plotly_chart(plot_time_series(recent_df, pollutant_select), use_container_width=True)
 
-def show_forecasts(df):
-    """Forecast view"""
-    st.header("🔮 Air Quality Forecasts")
-    
-    # Try to load models
-    if not st.session_state.models_loaded:
-        with st.spinner("Loading models..."):
-            models = load_models()
-            if models:
-                st.session_state.models = models
-                st.session_state.models_loaded = True
-                st.success(f"Loaded models for {len(models)} pollutants")
-            else:
-                st.warning("No trained models found. Please train models first using: `python scripts/train_models.py`")
-                return
-    
-    # Forecast settings
-    col1, col2 = st.columns(2)
-    with col1:
-        pollutant = st.selectbox("Select Pollutant", list(st.session_state.models.keys()))
-    with col2:
-        forecast_days = st.slider("Forecast Days", 1, 7, 3)
-    
-    if st.button("Generate Forecast"):
-        with st.spinner("Generating forecast..."):
-            # Get latest data point
-            latest_data = df.tail(24)  # Last 24 hours for context
-            
-            # Simple forecast (placeholder - would use actual model prediction)
-            forecast_hours = forecast_days * 24
-            last_value = df[pollutant].iloc[-1]
-            
-            # Generate forecast dates
-            last_date = df['datetime'].iloc[-1]
-            forecast_dates = pd.date_range(start=last_date + timedelta(hours=1), 
-                                          periods=forecast_hours, freq='H')
-            
-            # Simple forecast (add some random walk)
-            np.random.seed(42)
-            forecast_values = [last_value]
-            for _ in range(forecast_hours - 1):
-                change = np.random.normal(0, 5)
-                next_val = max(0, forecast_values[-1] + change)
-                forecast_values.append(next_val)
-            
-            # Plot forecast
-            st.plotly_chart(plot_forecast(df.tail(168), forecast_dates, 
-                                         forecast_values, pollutant), 
-                          use_container_width=True)
-            
-            # Forecast summary
-            st.subheader("Forecast Summary")
-            avg_forecast = np.mean(forecast_values)
-            max_forecast = np.max(forecast_values)
-            
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Average Predicted", f"{avg_forecast:.1f} μg/m³")
-            col2.metric("Maximum Predicted", f"{max_forecast:.1f} μg/m³")
-            col3.metric("Trend", "Stable" if abs(forecast_values[-1] - forecast_values[0]) < 10 else "Variable")
-
-def show_analysis(df):
-    """Data analysis view"""
-    st.header("📊 Data Analysis")
-    
-    # Pollutant correlations
-    st.subheader("Pollutant Correlations")
-    pollutants = config.data_config['pollutants']
-    corr_matrix = df[pollutants].corr()
-    
-    fig = px.imshow(corr_matrix, text_auto=True, aspect="auto",
-                    title="Correlation Matrix of Pollutants",
-                    color_continuous_scale='RdBu_r')
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Distribution plots
-    st.subheader("Pollutant Distributions")
-    selected_pollutant = st.selectbox("Select Pollutant for Distribution", pollutants)
-    
-    fig = px.histogram(df, x=selected_pollutant, nbins=50,
-                       title=f'Distribution of {selected_pollutant}')
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Statistics
-    st.subheader("Summary Statistics")
-    st.dataframe(df[pollutants].describe())
-
-def show_about():
-    """About page"""
-    st.header("About This System")
+def show_upload_page():
+    """CSV Upload and Prediction Page"""
+    st.header("📤 Upload & Predict")
     
     st.markdown("""
-    ## 🌍 Air Quality Forecasting System
+    Upload your air quality CSV file to get predictions and insights.
     
-    This system uses machine learning to predict air quality levels and provide early warnings
-    for pollution events.
-    
-    ### Features:
-    - **Real-time Monitoring**: Track current air quality levels
-    - **Forecasting**: Predict future pollution levels up to 7 days ahead
-    - **Multiple Models**: XGBoost, LSTM, ARIMA, and Prophet models
-    - **Health Alerts**: Get notifications when air quality becomes unhealthy
-    
-    ### Pollutants Monitored:
-    - PM2.5 - Fine Particulate Matter
-    - PM10 - Coarse Particulate Matter
-    - NO2 - Nitrogen Dioxide
-    - SO2 - Sulfur Dioxide
-    - CO - Carbon Monoxide
-    - O3 - Ozone
-    
-    ### How to Use:
-    1. **Dashboard**: View current air quality and recent trends
-    2. **Forecasts**: Generate predictions for future air quality
-    3. **Data Analysis**: Explore pollutant correlations and patterns
-    
-    ### Data Sources:
-    - Central Pollution Control Board (CPCB)
-    - OpenAQ API
-    - Local monitoring stations
-    
-    ---
-    **Version**: 1.0.0  
-    **Last Updated**: 2024
+    **Required Format:**
+    - Must include a datetime column
+    - Should contain at least one pollutant: PM2.5, PM10, NO2, SO2, CO, or O3
+    - Minimum 50 rows of data
     """)
-
-if __name__ == "__main__":
-    main()
+    
+    # File uploader
+    uploaded_file = st.file_uploader(
+        "Choose a CSV file",
+        type=['csv'],
+        help="Upload your air quality data in CSV format"
+    )
+    
+    if uploaded_file is not None:
+        try:
+            # Read CSV
+            df_uploaded = pd.read_csv(uploaded_file)
+            
+            # Initialize uploader
+            uploader = CSVUploader()
+            
+            # Display raw data preview
+            st.subheader("📋 Data Preview")
+            st.dataframe(df_uploaded.head(10), use_container_width=True)
+            
+            # Validate CSV
+            is_valid, errors = uploader.validate_csv(df_uploaded)
+            
+            if not is_valid:
+                st.markdown('<div class="error-box">', unsafe_allow_html=True)
+                st.error("❌ Validation Failed")
+                for error in errors:
+                    st.write(f"- {error}")
+                st.markdown('</div>', unsafe_allow_html=True)
+                return
+            
+            # Validation passed
+            st.markdown('<div class="success-box">', unsafe_allow_html=True)
+            st.success("✅ CSV file validated successfully!")
+            st.markdown('</div>', unsafe_allow_html=True)
+            
+            # Preprocess data
+            with st.spinner("Preprocessing data..."):
+                df_processed = uploader.preprocess_uploaded_data(df_uploaded)
+                st.session_state.uploaded_data = df_processed
+            
+            # Show data summary
+            st.subheader("📊 Data Summary")
+            summary = uploader.get_data_summary(df_processed)
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Records", summary['total_rows'])
+            with col2:
+                st.metric("Date Range", f"{summary['date_range']['start']} to {summary['date_range']['end']}")
+            with col3:
+                st.metric("Data Quality", summary['data_quality'])
+            
+            # Pollutant statistics
+            st.subheader("🔬 Pollutant Statistics")
+            stats_data = []
+            for pollutant, stats in summary['pollutants'].items():
+                stats_data.append({
+                    'Pollutant': pollutant,
+                    'Mean': f"{stats['mean']:.2f}",
+                    'Std': f"{stats['std']:.2f}",
+                    'Min': f"{stats['min']:.2f}",
+                    'Max': f"{stats['max']:.2f}",
+                    'Missing %': f"{summary['missing_data'][pollutant]:.2f}%"
+                })
+            
+            st.dataframe(pd.DataFrame(stats_data), use_container_width=True)
+            
+            # Check model compatibility
+            compatibility = uploader.check_model_compatibility(df_processed)
+            available_pollutants = [p for p, avail in compatibility.items() if avail]
+            
+            if not available_pollutants:
+                st.warning("No pollutants available for prediction")
+                return
+            
+            # Prediction section
+            st.subheader("🔮 Generate Predictions")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                predict_pollutants = st.multiselect(
+                    "Select pollutants to predict",
+                    available_pollutants,
+                    default=available_pollutants[:2] if len(available_pollutants) >= 2 else available_pollutants
+                )
+            
+            with col2:
+                include_forecast = st.checkbox("Include future forecast", value=False)
+                if include_forecast:
+                    forecast_hours = st.slider("Forecast hours ahead", 6, 72, 24)
+            
+            if st.button("🚀 Run Predictions", type="primary"):
+                if not predict_pollutants:
+                    st.warning("Please select at least one pollutant")
+                    return
+                
+                # Initialize prediction handler
+                handler = PredictionHandler()
+                
+                # Load models
+                with st.spinner("Loading models..."):
+                    loaded_models = handler.load_models(predict_pollutants)
+                    
+                    failed_models = [p for p, success in loaded_models.items() if not success]
+                    if failed_models:
+                        st.warning(f"Could not load models for: {', '.join(failed_models)}")
+                    
+                    success_models = [p for p, success in loaded_models.items() if success]
+                    if not success_models:
+                        st.error("No models could be loaded. Please train models first.")
+                        return
+                
+                # Make predictions
+                with st.spinner("Generating predictions..."):
+                    results = handler.predict_all_pollutants(df_processed)
+                    st.session_state.prediction_results = results
+                
+                # Calculate metrics
+                metrics = handler.calculate_metrics(results)
+                
+                # Display results
+                st.success("✅ Predictions completed!")
+                
+                # Show metrics
+                st.subheader("📈 Model Performance")
+                metrics_data = []
+                for pollutant, metric in metrics.items():
+                    metrics_data.append({
+                        'Pollutant': pollutant,
+                        'MAE': f"{metric['mae']:.2f}",
+                        'RMSE': f"{metric['rmse']:.2f}",
+                        'MAPE': f"{metric['mape']:.2f}%",
+                        'R²': f"{metric['r2']:.3f}",
+                        'Samples': metric['samples']
+                    })
+                
+                st.dataframe(pd.DataFrame(metrics_data), use_container_width=True)
+                
+                # Visualize predictions
+                st.subheader("📊 Prediction Visualizations")
+                
+                for pollutant in success_models:
+                    if pollutant in results and results[pollutant] is not None:
+                        with st.expander(f"📈 {pollutant} Results", expanded=True):
+                            result_df = results[pollutant]
+                            
+                            # Plot comparison
+                            st.plotly_chart(
+                                plot_prediction_comparison(result_df, pollutant),
+                                use_container_width=True
+                            )
+                            
+                            # Error distribution
+                            fig_error = px.histogram(
+                                result_df,
+                                x=f'{pollutant}_error',
+                                title=f'{pollutant} - Prediction Error Distribution',
+                                labels={f'{pollutant}_error': 'Prediction Error (μg/m³)'}
+                            )
+                            st.plotly_chart(fig_error, use_container_width=True)
+                            
+                            # Show sample predictions
+                            st.write("**Sample Predictions:**")
+                            display_cols = [f'{pollutant}_actual', f'{pollutant}_predicted', f'{pollutant}_error']
+                            st.dataframe(result_df[display_cols].head(10), use_container_width=True)
+                
+                # Generate insights
+                st.subheader("💡 Insights")
+                insights = handler.generate_insights(df_processed, results)
+                
+                for insight in insights:
+                    st.write(insight)
+                
+                # Future forecast
+                if include_forecast:
+                    st.subheader("🔮 Future Forecast")
+                    
+                    forecast_pollutant = st.selectbox(
+                        "Select pollutant for forecast",
+                        success_models
+                    )
+                    
+                    if st.button("Generate Forecast"):
+                        with st.spinner("Generating forecast..."):
+                            forecast_df = handler.forecast_future(
+                                df_processed,
+                                forecast_pollutant,
+                                hours_ahead=forecast_hours
+                            )
+                        
+                        # Plot forecast
+                        fig_forecast = go.Figure()
+                        
+                        # Historical data (last 48 hours)
+                        historical = df_processed[forecast_pollutant].tail(48)
+                        fig_forecast.add_trace(go.Scatter(
+                            x=historical.index,
+                            y=historical.values,
+                            mode='lines',
+                            name='Historical',
+                            line=dict(color='blue')
+                        ))
+                        
+                        # Forecast
+                        fig_forecast.add_trace(go.Scatter(
+                            x=forecast_df.index,
+                            y=forecast_df[f'{forecast_pollutant}_forecast'],
+                            mode='lines+markers',
+                            name='Forecast',
+                            line=dict(color='red', dash='dash')
+                        ))
+                        
+                        fig_forecast.update_layout(
+                            title=f'{forecast_pollutant} - {forecast_hours}h Forecast',
+                            xaxis_title='Date',
+                            yaxis_title=f'{forecast_pollutant} (μg/m³)',
+                            hovermode='x unified',
+                            height=400
+                        )
+                        
+                        st.plotly_chart(fig_forecast, use_container_width=True)
+                        
+                        # Forecast statistics
+                        avg_forecast = forecast_df[f'{forecast_pollutant}_forecast'].mean()
+                        max_forecast = forecast_df[f'{forecast_pollutant}_forecast'].max()
+                        min_forecast = forecast_df[f'{forecast_pollutant}_forecast'].min()
+                        
+                        col1, col2, col3 = st.columns(3)
+                        col1.metric("Average", f"{avg_forecast:.1f} μg/m³")
+                        col2.metric("Maximum", f"{max_forecast:.1f} μg/m³")
+                        col3.metric("Minimum", f"{min_forecast:.1f} μg/m³")
+                
+                # Download results
+                st.subheader("💾 Download Results")
+                
+                # Combine all results
+                combined_results = df_processed.copy()
+                for pollutant, result_df in results.items():
+                    if result_df is not None:
+                        combined_results = combined_results.join(
+                            result_df[[f'{pollutant}_predicted']],
+                            how='left'
+                        )
+                
+                csv = combined_results.to_csv()
+                st.download_button(
+                    label="📥 Download Predictions as CSV",
+                    data=csv,
+                    file_name=f"predictions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv"
+                )
+        
+        except Exception as e:
+            st.error(f"Error processing file: {str(e)}")
+            st.exception(e)
+    
+    else:
+        # Show example CSV format
+        st.subheader("📝 Example CSV Format")
+        
+        example_data = {
+            'datetime': ['2024-01-01 00:00:00', '2024-01-01 01:00:00', '2024-01-01 02:00:00'],
+            'PM2.5': [45.2, 52.1, 48.9],
+            'PM10': [78.5, 85.2, 81.3],
+            'NO2': [32.1, 35.6, 33.8],
+            'SO2': [12.5, 14.2, 13.1],
+            'CO': [1.2, 1.4, 1.3],
+            'O3': [45.2, 48.1, 46.5]
+        }
+        
+        st.dataframe(pd.DataFrame(example_data), use_container_width=True)
+        
+        st.info("💡 Your CSV should have similar columns. Datetime column is required, pollutants are optional.")
